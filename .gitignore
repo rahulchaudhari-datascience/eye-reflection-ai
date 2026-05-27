@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# Environment variables
+.env
+
+# Build files
+build/
+dist/
+*.egg-info/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+
+# Models
+models/
+checkpoints/
+
+# Temporary files
+temp/
+tmp/
+
+# Streamlit
+.streamlit/secrets.toml
+
+
+# Tokenizer/model configs
+tokenizer.json
+tokenizer_config.json
+generation_config.json
+special_tokens_map.json
+config.json
+preprocessor_config.json
+
+
+# Large vocab files
+vocab.txt
+merges.txt
