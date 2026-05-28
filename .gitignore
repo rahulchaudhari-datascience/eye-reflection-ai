@@ -59,3 +59,6 @@ preprocessor_config.json
 # Large vocab files
 vocab.txt
 merges.txt
+
+
+image forensicTestsamples/
