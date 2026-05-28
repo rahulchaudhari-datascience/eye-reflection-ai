@@ -8,4 +8,18 @@ REAL_ESRGAN_MODEL_PATH = "models/realesrgan/RealESRGAN_x4plus.pth"
 # Example: "models/yolo/yolov11_face.pt"
 YOLO_FACE_MODEL_PATH = None
 
+# Reflection enhancement defaults for higher-resolution outputs.
+REFLECTION_SR_SCALE = 4
+REFLECTION_TARGET_MIN_SIDE = 1536
+REFLECTION_MAX_SIDE = 8192
+REFLECTION_MAX_PASSES = 6
+REFLECTION_DENOISE_H = 9
+REFLECTION_CLAHE_CLIP = 3.0
+
+# Optional external tool hooks. Provide command templates with {input} and {output}.
+# Example: r"C:\\Tools\\topaz\\topaz.exe --input {input} --output {output}"
+EXTERNAL_SR_CMD = None
+EXTERNAL_DEBLUR_CMD = None
+EXTERNAL_DENOISE_CMD = None
+
 OUTPUT_DIR = "outputs"

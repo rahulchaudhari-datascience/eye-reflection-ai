@@ -54,7 +54,11 @@ def display_pipeline_summary(
     original_image: Image.Image,
     raw_eye: np.ndarray,
     extracted_reflection: np.ndarray,
+    pre_sr: Optional[np.ndarray],
+    sr: Optional[np.ndarray],
     enhanced_reflection: np.ndarray,
+    panorama: Optional[np.ndarray],
+    foveated: Optional[np.ndarray],
     scene: Optional[Image.Image],
     reasoning: str,
     eye_name: str,
@@ -82,15 +86,38 @@ def display_pipeline_summary(
     
     with col1:
         st.markdown("### 4️⃣ Enhance Image")
-        st.text("Denoise + Contrast\nenhancement applied")
+        if pre_sr is not None:
+            st.image(pre_sr, use_container_width=True, caption="Pre-SR enhancement")
+        else:
+            st.text("Denoise + Contrast\nenhancement applied")
     
     with col2:
         st.markdown("### 5️⃣ Super Resolution")
-        st.text("ESRGAN upscaling\n(4x magnification)")
+        if sr is not None:
+            st.image(sr, use_container_width=True, caption="Super-resolution output")
+        else:
+            st.text("ESRGAN upscaling\n(4x magnification)")
     
     with col3:
         st.markdown("### 6️⃣ Final Result")
         st.image(enhanced_reflection, use_container_width=True, caption="Enhanced reflection")
+
+    if panorama is not None or foveated is not None:
+        st.divider()
+        st.subheader("Corneal Imaging Outputs")
+        pano_col, fovea_col = st.columns(2)
+        with pano_col:
+            st.markdown("**Spherical panorama (cropped)**")
+            if panorama is not None:
+                st.image(panorama, use_container_width=True)
+            else:
+                st.info("Panorama unavailable")
+        with fovea_col:
+            st.markdown("**Foveated retinal image (45° FOV)**")
+            if foveated is not None:
+                st.image(foveated, use_container_width=True)
+            else:
+                st.info("Foveated image unavailable")
     
     st.divider()
     
@@ -176,8 +203,24 @@ def main() -> None:
         st.markdown("**Extracted reflection**")
         st.image(result.left_reflection, use_container_width=True)
 
+        if result.left_pre_sr is not None:
+            st.markdown("**Enhanced (pre-SR)**")
+            st.image(result.left_pre_sr, use_container_width=True)
+
+        if result.left_sr is not None:
+            st.markdown("**Super-resolution**")
+            st.image(result.left_sr, use_container_width=True)
+
         st.markdown("**Enhanced reflection**")
         st.image(result.enhanced_left_reflection, use_container_width=True)
+
+        if result.left_panorama is not None:
+            st.markdown("**Spherical panorama (cropped)**")
+            st.image(result.left_panorama, use_container_width=True)
+
+        if result.left_foveated is not None:
+            st.markdown("**Foveated retinal image (45° FOV)**")
+            st.image(result.left_foveated, use_container_width=True)
 
         st.markdown("**Reasoning (caption)**")
         st.write(result.reasoning_left)
@@ -194,8 +237,24 @@ def main() -> None:
         st.markdown("**Extracted reflection**")
         st.image(result.right_reflection, use_container_width=True)
 
+        if result.right_pre_sr is not None:
+            st.markdown("**Enhanced (pre-SR)**")
+            st.image(result.right_pre_sr, use_container_width=True)
+
+        if result.right_sr is not None:
+            st.markdown("**Super-resolution**")
+            st.image(result.right_sr, use_container_width=True)
+
         st.markdown("**Enhanced reflection**")
         st.image(result.enhanced_right_reflection, use_container_width=True)
+
+        if result.right_panorama is not None:
+            st.markdown("**Spherical panorama (cropped)**")
+            st.image(result.right_panorama, use_container_width=True)
+
+        if result.right_foveated is not None:
+            st.markdown("**Foveated retinal image (45° FOV)**")
+            st.image(result.right_foveated, use_container_width=True)
 
         st.markdown("**Reasoning (caption)**")
         st.write(result.reasoning_right)
@@ -216,7 +275,11 @@ def main() -> None:
             original_image=pil,
             raw_eye=result.left_eye,
             extracted_reflection=result.left_reflection,
+            pre_sr=result.left_pre_sr,
+            sr=result.left_sr,
             enhanced_reflection=result.enhanced_left_reflection,
+            panorama=result.left_panorama,
+            foveated=result.left_foveated,
             scene=result.scene_left,
             reasoning=result.reasoning_left,
             eye_name="Left"
@@ -227,7 +290,11 @@ def main() -> None:
             original_image=pil,
             raw_eye=result.right_eye,
             extracted_reflection=result.right_reflection,
+            pre_sr=result.right_pre_sr,
+            sr=result.right_sr,
             enhanced_reflection=result.enhanced_right_reflection,
+            panorama=result.right_panorama,
+            foveated=result.right_foveated,
             scene=result.scene_right,
             reasoning=result.reasoning_right,
             eye_name="Right"

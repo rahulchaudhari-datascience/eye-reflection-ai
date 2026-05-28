@@ -12,6 +12,7 @@ from services.multimodal_reasoning_service import MultimodalReasoningService
 from services.pupil_detection_service import PupilDetectionService
 from services.reflection_enhancement_service import ReflectionEnhancementService
 from services.reflection_extraction_service import ReflectionExtractionService
+from services.corneal_imaging_service import CornealImagingService
 
 
 PupilCircle = Tuple[int, int, int]
@@ -26,11 +27,19 @@ class ForensicPipelineResult:
     right_pupil: Optional[PupilCircle]
     left_reflection: np.ndarray
     right_reflection: np.ndarray
+    left_pre_sr: Optional[np.ndarray]
+    right_pre_sr: Optional[np.ndarray]
+    left_sr: Optional[np.ndarray]
+    right_sr: Optional[np.ndarray]
     enhanced_left_reflection: np.ndarray
     enhanced_right_reflection: np.ndarray
     reasoning_left: str
     reasoning_right: str
     deepfake: Dict[str, Any]
+    left_panorama: Optional[np.ndarray] = None
+    right_panorama: Optional[np.ndarray] = None
+    left_foveated: Optional[np.ndarray] = None
+    right_foveated: Optional[np.ndarray] = None
     scene_left: Optional[Any] = None
     scene_right: Optional[Any] = None
 
@@ -43,6 +52,7 @@ class ForensicVisionPipeline:
         self.pupil_service = PupilDetectionService()
         self.reflection_service = ReflectionExtractionService()
         self.enhancement_service = ReflectionEnhancementService()
+        self.corneal_service = CornealImagingService()
         self.reasoning_service = MultimodalReasoningService()
         self.deepfake_service = DeepfakeAnalysisService()
 
@@ -93,8 +103,11 @@ class ForensicVisionPipeline:
         left_reflection = self.reflection_service.extract(left_eye, left_pupil)
         right_reflection = self.reflection_service.extract(right_eye, right_pupil)
 
-        enhanced_left = self.enhancement_service.enhance(left_reflection)
-        enhanced_right = self.enhancement_service.enhance(right_reflection)
+        left_pre_sr, left_sr, enhanced_left = self.enhancement_service.enhance_with_stages(left_reflection)
+        right_pre_sr, right_sr, enhanced_right = self.enhancement_service.enhance_with_stages(right_reflection)
+
+        corneal_left = self.corneal_service.reconstruct(left_eye)
+        corneal_right = self.corneal_service.reconstruct(right_eye)
 
         # Reasoning should describe the reflection features; analyze the tight reflection ROI.
         try:
@@ -131,11 +144,19 @@ class ForensicVisionPipeline:
             right_pupil=right_pupil,
             left_reflection=left_reflection,
             right_reflection=right_reflection,
+            left_pre_sr=left_pre_sr,
+            right_pre_sr=right_pre_sr,
+            left_sr=left_sr,
+            right_sr=right_sr,
             enhanced_left_reflection=enhanced_left,
             enhanced_right_reflection=enhanced_right,
             reasoning_left=reasoning_left,
             reasoning_right=reasoning_right,
             deepfake=deepfake,
+            left_panorama=corneal_left.panorama,
+            right_panorama=corneal_right.panorama,
+            left_foveated=corneal_left.foveated,
+            right_foveated=corneal_right.foveated,
             scene_left=scene_left,
             scene_right=scene_right,
         )

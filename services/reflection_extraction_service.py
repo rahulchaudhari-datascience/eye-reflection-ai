@@ -286,16 +286,24 @@ class ReflectionExtractionService:
             by = int(y + bh / 2)
 
         # Tight reflection crop size:
-        # - proportional to highlight size
-        # - clamped so we don't return the whole eye
-        blob_scale = int(round(3.6 * max(bw, bh)))
-        min_side = 48
-        max_side = int(round(0.75 * min(h, w)))
-        side = int(max(min_side, min(max_side, blob_scale)))
+        # - prefer pupil-centered crops (reflection is on cornea/iris)
+        # - otherwise use highlight size
+        min_side = 128
+        max_side = int(round(0.82 * min(h, w)))
+
+        if pupil_circle is not None:
+            px, py, pr = [int(v) for v in pupil_circle]
+            side = int(max(min_side, min(max_side, 4.2 * pr)))
+            cx, cy = px, py
+        else:
+            blob_scale = int(round(4.2 * max(bw, bh)))
+            side = int(max(min_side, min(max_side, blob_scale)))
+            cx, cy = bx, by
+
         half = side // 2
 
-        x1, y1 = max(0, bx - half), max(0, by - half)
-        x2, y2 = min(w, bx + half), min(h, by + half)
+        x1, y1 = max(0, cx - half), max(0, cy - half)
+        x2, y2 = min(w, cx + half), min(h, cy + half)
         crop = eye_image[y1:y2, x1:x2]
         if crop.size == 0:
             return None
