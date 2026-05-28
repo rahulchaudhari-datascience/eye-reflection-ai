@@ -36,18 +36,21 @@ class ReflectionExtractionService:
                 try:
                     reflection = self._extract_specular(pupil_crop, None)
                     if reflection is not None and reflection.size > 0:
-                        return reflection
+                        if self._is_reflection_useful(reflection):
+                            return reflection
                 except Exception:
                     pass
 
-                return pupil_crop
+                if self._is_reflection_useful(pupil_crop):
+                    return pupil_crop
 
             iris_crop = self._extract_iris_crop(img, scaled_circle)
             if iris_crop is not None and iris_crop.size > 0:
                 try:
                     reflection = self._extract_specular(iris_crop, None)
                     if reflection is not None and reflection.size > 0:
-                        return reflection
+                        if self._is_reflection_useful(reflection):
+                            return reflection
                 except Exception:
                     pass
                 return iris_crop
@@ -56,12 +59,30 @@ class ReflectionExtractionService:
         try:
             reflection = self._extract_specular(img, None)
             if reflection is not None and reflection.size > 0:
-                return reflection
+                if self._is_reflection_useful(reflection):
+                    return reflection
         except Exception:
             pass
 
         # Last resort: return the whole eye crop.
         return img
+
+    def _is_reflection_useful(self, image: np.ndarray) -> bool:
+        """Reject tiny, overly dark, or flat patches that look like blobs."""
+
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        h, w = gray.shape[:2]
+        if min(h, w) < 20:
+            return False
+
+        mean = float(np.mean(gray))
+        std = float(np.std(gray))
+        if mean < 18.0:
+            return False
+        if std < 8.0:
+            return False
+
+        return True
 
     def _maybe_upscale_for_reflection(
         self, eye_image: np.ndarray, pupil_circle: Optional[PupilCircle]
@@ -132,13 +153,11 @@ class ReflectionExtractionService:
         if crop.size == 0:
             return None
 
-        # Circular mask to match the "pupil/iris patch" visual.
+        # Circular mask to match the "pupil/iris patch" visual, softly blended.
         ch, cw = crop.shape[:2]
         mask = np.zeros((ch, cw), dtype=np.uint8)
         cv2.circle(mask, (cw // 2, ch // 2), int(0.98 * min(ch, cw) / 2), 255, -1)
-        out = crop.copy()
-        out[mask == 0] = 0
-        return out
+        return self._soft_mask(crop, mask)
 
     def _extract_iris_crop(self, eye_image: np.ndarray, pupil_circle: PupilCircle) -> Optional[np.ndarray]:
         h, w = eye_image.shape[:2]
@@ -162,8 +181,7 @@ class ReflectionExtractionService:
         rr = int(0.98 * min(cx, cy))
         cv2.circle(mask, (cx, cy), rr, 255, -1)
 
-        out = crop.copy()
-        out[mask == 0] = 0
+        out = self._soft_mask(crop, mask)
 
         # Mild detail enhancement.
         return cv2.detailEnhance(out, sigma_s=10, sigma_r=0.15)
@@ -290,10 +308,19 @@ class ReflectionExtractionService:
         l2 = clahe.apply(l)
         crop = cv2.cvtColor(cv2.merge([l2, a, b]), cv2.COLOR_LAB2RGB)
 
-        # Circular mask to emphasize pupil reflection aesthetics.
+        # Circular mask to emphasize pupil reflection aesthetics, with soft edge.
         ch, cw = crop.shape[:2]
         mask = np.zeros((ch, cw), dtype=np.uint8)
-        cv2.circle(mask, (cw // 2, ch // 2), int(0.48 * min(ch, cw)), 255, -1)
-        out = crop.copy()
-        out[mask == 0] = 0
-        return out
+        cv2.circle(mask, (cw // 2, ch // 2), int(0.62 * min(ch, cw) / 2), 255, -1)
+        return self._soft_mask(crop, mask)
+
+    def _soft_mask(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Blend masked region with a neutral background instead of hard black."""
+
+        blur = cv2.GaussianBlur(mask, (0, 0), sigmaX=2.0)
+        alpha = blur.astype(np.float32) / 255.0
+        alpha = np.clip(alpha, 0.0, 1.0)
+
+        base = np.full_like(image, int(np.median(image)), dtype=np.uint8)
+        out = (image.astype(np.float32) * alpha[..., None] + base.astype(np.float32) * (1.0 - alpha[..., None]))
+        return np.clip(out, 0, 255).astype(np.uint8)
