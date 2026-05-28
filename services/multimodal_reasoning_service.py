@@ -65,17 +65,19 @@ class MultimodalReasoningService:
         pil = self._to_pil(image)
 
         # Prefer deterministic, short outputs for responsiveness.
-        gen_kwargs = {"max_new_tokens": 40, "do_sample": False}
+        gen_kwargs = {"max_new_tokens": 90, "do_sample": False}
+
+        prompt_text = self._load_prompt()
 
         # Task-specific calling conventions vary across transformers versions.
         result = None
         if self._task == "image-text-to-text":
             # Some pipelines require both an image + a text prompt.
             try:
-                result = self._caption_pipeline({"image": pil, "text": "Describe the image."}, **gen_kwargs)
+                result = self._caption_pipeline({"image": pil, "text": prompt_text}, **gen_kwargs)
             except TypeError:
                 # Some versions don't accept generation kwargs at pipeline level.
-                result = self._caption_pipeline({"image": pil, "text": "Describe the image."})
+                result = self._caption_pipeline({"image": pil, "text": prompt_text})
         else:
             try:
                 result = self._caption_pipeline(pil, **gen_kwargs)
@@ -88,6 +90,19 @@ class MultimodalReasoningService:
         if isinstance(first, dict) and "generated_text" in first:
             return str(first["generated_text"])
         return str(first)
+
+    def _load_prompt(self) -> str:
+        default = "Describe the image."
+        try:
+            from pathlib import Path
+
+            path = Path(__file__).resolve().parent.parent / "prompts" / "reflection_reasoning_prompt.txt"
+            if not path.exists():
+                return default
+            text = path.read_text(encoding="utf-8", errors="ignore").strip()
+            return text or default
+        except Exception:
+            return default
 
     def _to_pil(self, image):
         from PIL import Image

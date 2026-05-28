@@ -61,7 +61,26 @@ class ForensicVisionPipeline:
     def process(self, image: np.ndarray) -> ForensicPipelineResult:
         faces = self.face_detector.detect(image)
 
-        eyes = self.eye_service.extract_eyes(image)
+        # Eye detection is more reliable when we focus on the face ROI.
+        eye_input = image
+        try:
+            if faces is not None and len(faces) > 0:
+                # Pick largest face box.
+                x, y, w, h = max(faces, key=lambda r: int(r[2] * r[3]))
+                pad = int(0.25 * max(w, h))
+                ih, iw = image.shape[:2]
+                x1 = max(0, int(x - pad))
+                y1 = max(0, int(y - pad))
+                x2 = min(iw, int(x + w + pad))
+                y2 = min(ih, int(y + h + pad))
+                if x2 > x1 and y2 > y1:
+                    eye_input = image[y1:y2, x1:x2]
+        except Exception:
+            eye_input = image
+
+        eyes = self.eye_service.extract_eyes(eye_input)
+        if eyes is None and eye_input is not image:
+            eyes = self.eye_service.extract_eyes(image)
         if eyes is None:
             raise ValueError("No eyes detected")
 
@@ -74,16 +93,17 @@ class ForensicVisionPipeline:
         left_reflection = self.reflection_service.extract(left_eye, left_pupil)
         right_reflection = self.reflection_service.extract(right_eye, right_pupil)
 
-        enhanced_left = self.enhancement_service.upscale(left_reflection)
-        enhanced_right = self.enhancement_service.upscale(right_reflection)
+        enhanced_left = self.enhancement_service.enhance(left_reflection)
+        enhanced_right = self.enhancement_service.enhance(right_reflection)
 
+        # Reasoning should describe the reflection features; analyze the tight reflection ROI.
         try:
-            reasoning_left = self.reasoning_service.analyze(enhanced_left)
+            reasoning_left = self.reasoning_service.analyze(left_reflection)
         except Exception as exc:
             reasoning_left = f"[reasoning failed] {type(exc).__name__}: {exc}"
 
         try:
-            reasoning_right = self.reasoning_service.analyze(enhanced_right)
+            reasoning_right = self.reasoning_service.analyze(right_reflection)
         except Exception as exc:
             reasoning_right = f"[reasoning failed] {type(exc).__name__}: {exc}"
 
