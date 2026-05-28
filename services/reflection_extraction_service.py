@@ -19,10 +19,18 @@ class ReflectionExtractionService:
         if img.dtype != np.uint8:
             img = np.clip(img, 0, 255).astype(np.uint8)
 
+        # Scale up tiny eye crops to stabilize specularity detection.
+        img, scaled_circle = self._maybe_upscale_for_reflection(img, pupil_circle)
+
         # 1) If we have a pupil circle, ALWAYS focus extraction on the pupil region.
         # This matches enterprise pipelines (crop pupil/iris first, then isolate reflection).
-        if pupil_circle is not None:
-            pupil_crop = self._extract_pupil_crop(img, pupil_circle)
+        if scaled_circle is None and pupil_circle is not None:
+            scaled_circle = pupil_circle
+        if scaled_circle is None:
+            scaled_circle = self._estimate_pupil_circle(img)
+
+        if scaled_circle is not None:
+            pupil_crop = self._extract_pupil_crop(img, scaled_circle)
             if pupil_crop is not None and pupil_crop.size > 0:
                 # Prefer specular highlight extraction inside the pupil crop.
                 try:
@@ -34,6 +42,16 @@ class ReflectionExtractionService:
 
                 return pupil_crop
 
+            iris_crop = self._extract_iris_crop(img, scaled_circle)
+            if iris_crop is not None and iris_crop.size > 0:
+                try:
+                    reflection = self._extract_specular(iris_crop, None)
+                    if reflection is not None and reflection.size > 0:
+                        return reflection
+                except Exception:
+                    pass
+                return iris_crop
+
         # 2) Otherwise, try specular highlight extraction on the full eye crop.
         try:
             reflection = self._extract_specular(img, None)
@@ -44,6 +62,55 @@ class ReflectionExtractionService:
 
         # Last resort: return the whole eye crop.
         return img
+
+    def _maybe_upscale_for_reflection(
+        self, eye_image: np.ndarray, pupil_circle: Optional[PupilCircle]
+    ) -> tuple[np.ndarray, Optional[PupilCircle]]:
+        h, w = eye_image.shape[:2]
+        if min(h, w) >= 120:
+            return eye_image, pupil_circle
+
+        scale = 2.0
+        new_w = int(round(w * scale))
+        new_h = int(round(h * scale))
+        up = cv2.resize(eye_image, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+
+        if pupil_circle is None:
+            return up, None
+
+        x, y, r = pupil_circle
+        scaled = (int(round(x * scale)), int(round(y * scale)), int(round(r * scale)))
+        return up, scaled
+
+    def _estimate_pupil_circle(self, eye_image: np.ndarray) -> Optional[PupilCircle]:
+        """Estimate pupil center from the darkest region when Hough fails."""
+
+        gray = cv2.cvtColor(eye_image, cv2.COLOR_RGB2GRAY)
+        h, w = gray.shape[:2]
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        # Focus on central region to avoid eyebrow/skin.
+        x1, x2 = int(0.15 * w), int(0.85 * w)
+        y1, y2 = int(0.20 * h), int(0.85 * h)
+        roi = blur[y1:y2, x1:x2]
+        if roi.size == 0:
+            return None
+
+        thresh_val = np.percentile(roi, 20)
+        _, bw = cv2.threshold(roi, int(thresh_val), 255, cv2.THRESH_BINARY_INV)
+        bw = cv2.medianBlur(bw, 5)
+
+        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+
+        best = max(contours, key=cv2.contourArea)
+        (cx, cy), r = cv2.minEnclosingCircle(best)
+        r = max(3, int(round(r)))
+        cx = int(round(cx + x1))
+        cy = int(round(cy + y1))
+
+        return (cx, cy, r)
 
     def _extract_pupil_crop(self, eye_image: np.ndarray, pupil_circle: PupilCircle) -> Optional[np.ndarray]:
         """Return a tight crop around the pupil/iris region.
@@ -205,7 +272,7 @@ class ReflectionExtractionService:
         # - clamped so we don't return the whole eye
         blob_scale = int(round(3.6 * max(bw, bh)))
         min_side = 48
-        max_side = int(round(0.55 * min(h, w)))
+        max_side = int(round(0.75 * min(h, w)))
         side = int(max(min_side, min(max_side, blob_scale)))
         half = side // 2
 
@@ -222,4 +289,11 @@ class ReflectionExtractionService:
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         l2 = clahe.apply(l)
         crop = cv2.cvtColor(cv2.merge([l2, a, b]), cv2.COLOR_LAB2RGB)
-        return crop
+
+        # Circular mask to emphasize pupil reflection aesthetics.
+        ch, cw = crop.shape[:2]
+        mask = np.zeros((ch, cw), dtype=np.uint8)
+        cv2.circle(mask, (cw // 2, ch // 2), int(0.48 * min(ch, cw)), 255, -1)
+        out = crop.copy()
+        out[mask == 0] = 0
+        return out

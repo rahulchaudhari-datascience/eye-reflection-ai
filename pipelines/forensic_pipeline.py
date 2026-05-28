@@ -114,12 +114,12 @@ class ForensicVisionPipeline:
         scene_service = self._get_scene_service()
         if scene_service is not None:
             try:
-                scene_left = scene_service.reconstruct(reasoning_left)
+                scene_left = scene_service.reconstruct(reasoning_left, enhanced_left)
             except Exception:
                 scene_left = None
 
             try:
-                scene_right = scene_service.reconstruct(reasoning_right)
+                scene_right = scene_service.reconstruct(reasoning_right, enhanced_right)
             except Exception:
                 scene_right = None
 
