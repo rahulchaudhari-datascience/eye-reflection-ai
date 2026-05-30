@@ -4,6 +4,14 @@ from typing import Any, Optional
 
 
 class SceneReconstructionService:
+    """Generate a scene estimate from eye-reflection reasoning.
+
+    The original single-eye reconstruction setup assumes accurate limbus
+    detection, corneal geometry estimation, and reflection ray tracing.
+    This service uses the reflection reasoning text and optional reference
+    image as a practical downstream approximation of that reconstruction step.
+    """
+
     def __init__(
         self,
         *,
@@ -43,7 +51,7 @@ class SceneReconstructionService:
     def available(self) -> bool:
         return self._pipe is not None
 
-    def reconstruct(self, reasoning_text: str, reference_image: Optional[Any] = None):
+    def reconstruct(self, geometry_context: str, reference_image: Optional[Any] = None):
         if self._pipe is None:
             raise RuntimeError(
                 "Scene reconstruction is unavailable. "
@@ -51,9 +59,10 @@ class SceneReconstructionService:
             )
 
         prompt = (
-            "Highly realistic indoor scene inferred from eye reflection, "
+            "Single-eye image reconstruction from corneal geometry and panorama, "
+            "following the pipeline reflection -> geometry -> panorama -> scene, "
             "natural lighting, sharp details, wide-angle view: "
-            f"{reasoning_text}"
+            f"{geometry_context}"
         )
 
         if reference_image is not None and self._img2img is not None:

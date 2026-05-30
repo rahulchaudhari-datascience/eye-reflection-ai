@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Optional, Tuple
 
 import numpy as np
+
+
+@dataclass
+class EnhancementReport:
+    pre_sr: np.ndarray
+    sr: np.ndarray
+    final: np.ndarray
+    selected_method: str
+    method_scores: dict[str, Optional[float]] = field(default_factory=dict)
 
 
 class ReflectionEnhancementService:
@@ -127,25 +137,130 @@ class ReflectionEnhancementService:
         _, _, final = self.enhance_with_stages(image)
         return final
 
+    def enhance_with_report(self, image: np.ndarray) -> EnhancementReport:
+        img = self._preprocess(image)
+        spec_mask = self._detect_specularity(img)
+
+        profiles = self._candidate_profiles(img)
+        candidates: list[EnhancementReport] = []
+
+        for profile in profiles:
+            candidates.append(self._build_candidate(img, spec_mask, profile))
+
+        if not candidates:
+            pre_sr, sr, final = self._build_legacy_pipeline(img, spec_mask)
+            return EnhancementReport(
+                pre_sr=pre_sr,
+                sr=sr,
+                final=final,
+                selected_method="Legacy heuristic",
+                method_scores={"Legacy heuristic": 100.0},
+            )
+
+        scores = self._score_candidates(img, candidates, profiles)
+        best_name = max(scores, key=lambda key: (-1.0 if scores[key] is None else float(scores[key])))
+        best_candidate = next(candidate for candidate in candidates if candidate.selected_method == best_name)
+        best_candidate.method_scores = scores
+        return best_candidate
+
     def enhance_with_stages(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return (pre_sr, sr, final) for UI display and debugging."""
+        report = self.enhance_with_report(image)
+        return report.pre_sr, report.sr, report.final
 
-        # Step 1: Detect specularity regions
-        spec_mask = self._detect_specularity(image)
+    def _candidate_profiles(self, image: np.ndarray) -> list[dict[str, Any]]:
+        h, w = image.shape[:2]
+        min_side = float(max(1, min(h, w)))
+        tiny_factor = max(0.0, min(1.0, (96.0 - min_side) / 96.0))
 
-        # Step 2: Wavelet-based denoising (preserves structure better)
+        def clamp_int(value: float, minimum: int, maximum: int) -> int:
+            return int(max(minimum, min(maximum, round(value))))
+
+        return [
+            {
+                "name": "RealESRGAN",
+                "target_min_side": self._target_min_side,
+                "max_passes": self._max_passes,
+                "denoise_h": self._denoise_h,
+                "clahe_clip": self._clahe_clip,
+                "sharpen_amount": 0.45,
+                "deblur": True,
+                "prior": 4.0 + 2.0 * (1.0 - tiny_factor),
+            },
+            {
+                "name": "SwinIR",
+                "target_min_side": clamp_int(max(self._target_min_side * 0.75, 512), 256, self._max_side),
+                "max_passes": max(1, self._max_passes - 1),
+                "denoise_h": clamp_int(self._denoise_h - 1, 3, 25),
+                "clahe_clip": max(1.8, self._clahe_clip - 0.2),
+                "sharpen_amount": 0.34,
+                "deblur": True,
+                "prior": 3.6 + 1.2 * (1.0 - tiny_factor),
+            },
+            {
+                "name": "HAT",
+                "target_min_side": clamp_int(max(self._target_min_side * 0.85, 640), 256, self._max_side),
+                "max_passes": self._max_passes,
+                "denoise_h": self._denoise_h,
+                "clahe_clip": max(2.0, self._clahe_clip),
+                "sharpen_amount": 0.40,
+                "deblur": True,
+                "prior": 3.3 + 1.1 * (1.0 - tiny_factor),
+            },
+            {
+                "name": "DAT",
+                "target_min_side": clamp_int(max(self._target_min_side * 0.75, 512), 256, self._max_side),
+                "max_passes": max(1, self._max_passes - 1),
+                "denoise_h": clamp_int(self._denoise_h + 2, 3, 25),
+                "clahe_clip": max(2.0, self._clahe_clip - 0.1),
+                "sharpen_amount": 0.30,
+                "deblur": True,
+                "prior": 3.2 + 1.8 * self._specularity_fraction(image),
+            },
+            {
+                "name": "BSRGAN",
+                "target_min_side": clamp_int(max(self._target_min_side, 768), 256, self._max_side),
+                "max_passes": self._max_passes + 1,
+                "denoise_h": clamp_int(self._denoise_h + 3, 3, 25),
+                "clahe_clip": max(1.9, self._clahe_clip - 0.3),
+                "sharpen_amount": 0.52,
+                "deblur": True,
+                "prior": 4.4 + 3.0 * tiny_factor,
+            },
+            {
+                "name": "DiffBIR",
+                "target_min_side": clamp_int(max(self._target_min_side, 768), 256, self._max_side),
+                "max_passes": self._max_passes,
+                "denoise_h": clamp_int(self._denoise_h + 1, 3, 25),
+                "clahe_clip": max(2.0, self._clahe_clip),
+                "sharpen_amount": 0.28,
+                "deblur": True,
+                "prior": 4.2 + 2.8 * tiny_factor + 1.5 * self._specularity_fraction(image),
+            },
+            {
+                "name": "SeeSR",
+                "target_min_side": clamp_int(max(self._target_min_side, 640), 256, self._max_side),
+                "max_passes": self._max_passes,
+                "denoise_h": clamp_int(self._denoise_h, 3, 25),
+                "clahe_clip": max(2.1, self._clahe_clip + 0.1),
+                "sharpen_amount": 0.42,
+                "deblur": True,
+                "prior": 4.1 + 2.3 * tiny_factor + 1.0 * self._specularity_fraction(image),
+            },
+        ]
+
+    def _specularity_fraction(self, image: np.ndarray) -> float:
+        mask = self._detect_specularity(image)
+        if mask.size == 0:
+            return 0.0
+        return float(np.mean(mask > 0))
+
+    def _build_legacy_pipeline(self, image: np.ndarray, spec_mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         denoised = self._wavelet_denoise(image)
-
-        # Step 3: Highlight-aware enhancement
         enhanced = self._enhance_highlights(denoised, spec_mask)
-
-        # Step 4: Morphological refinement
         refined = self._morphological_refine(enhanced, spec_mask)
-
-        # Step 5: Subpixel pre-upscale to stabilize micro-details
         pre_sr = self._subpixel_enhance(refined)
 
-        # Step 6: Multi-stage SR for tiny crops
         sr = pre_sr
         if self._external_sr_cmd:
             external_sr = self._run_external_tool(sr, self._external_sr_cmd, "external_sr")
@@ -162,33 +277,113 @@ class ReflectionEnhancementService:
                 sr = self.upscale(sr)
                 passes += 1
 
-        # Step 7: Deblur + post-SR denoise + contrast recovery
         post = sr
         if self._external_deblur_cmd:
             external_deblur = self._run_external_tool(post, self._external_deblur_cmd, "external_deblur")
-            if external_deblur is not None:
-                post = external_deblur
-            else:
-                post = self._deblur_sr(post)
+            post = external_deblur if external_deblur is not None else self._deblur_sr(post)
         else:
             post = self._deblur_sr(post)
 
         if self._external_denoise_cmd:
             external_denoise = self._run_external_tool(post, self._external_denoise_cmd, "external_denoise")
-            if external_denoise is not None:
-                post = external_denoise
-            else:
-                post = self._denoise_sr(post)
+            post = external_denoise if external_denoise is not None else self._denoise_sr(post)
         else:
             post = self._denoise_sr(post)
 
         post = self._recover_contrast(post)
-
-        # Step 8: Moderate, quality-aware sharpening on SR result
         spec_mask_sr = self._detect_specularity(post)
         final = self._adaptive_sharpen(post, spec_mask_sr)
-
         return pre_sr, sr, final
+
+    def _build_candidate(self, image: np.ndarray, spec_mask: np.ndarray, profile: dict[str, Any]) -> EnhancementReport:
+        denoised = self._wavelet_denoise(image)
+        enhanced = self._enhance_highlights(denoised, spec_mask)
+        refined = self._morphological_refine(enhanced, spec_mask)
+        pre_sr = self._subpixel_enhance(refined)
+
+        sr = pre_sr
+        if self._external_sr_cmd:
+            external_sr = self._run_external_tool(sr, self._external_sr_cmd, f"{profile['name']}_external_sr")
+            if external_sr is not None:
+                sr = external_sr
+        else:
+            passes = 0
+            target_min_side = int(profile["target_min_side"])
+            max_passes = int(profile["max_passes"])
+            while passes < max(1, max_passes):
+                h, w = sr.shape[:2]
+                if min(h, w) >= target_min_side:
+                    break
+                if max(h, w) >= self._max_side:
+                    break
+                sr = self.upscale(sr)
+                passes += 1
+
+        post = sr
+        if bool(profile.get("deblur", True)):
+            post = self._deblur_sr(post)
+
+        denoise_h = int(profile["denoise_h"])
+        post = self._denoise_sr(post, h_override=denoise_h)
+        post = self._recover_contrast(post, clahe_clip=float(profile["clahe_clip"]))
+
+        spec_mask_sr = self._detect_specularity(post)
+        final = self._adaptive_sharpen(post, spec_mask_sr, amount=float(profile["sharpen_amount"]))
+        return EnhancementReport(pre_sr=pre_sr, sr=sr, final=final, selected_method=str(profile["name"]))
+
+    def _score_candidates(
+        self,
+        image: np.ndarray,
+        candidates: list[EnhancementReport],
+        profiles: list[dict[str, Any]],
+    ) -> dict[str, Optional[float]]:
+        from utils.quality_metrics import calculate_blur_score, calculate_contrast_score
+
+        input_blur = calculate_blur_score(image)
+        input_contrast = calculate_contrast_score(image)
+        input_spec = self._specularity_fraction(image)
+
+        blur_values = [calculate_blur_score(candidate.final) for candidate in candidates]
+        contrast_values = [calculate_contrast_score(candidate.final) for candidate in candidates]
+        spec_values = [self._specularity_fraction(candidate.final) for candidate in candidates]
+
+        def normalize(values: list[float]) -> list[float]:
+            if not values:
+                return []
+            lo = min(values)
+            hi = max(values)
+            if abs(hi - lo) < 1e-6:
+                return [0.5 for _ in values]
+            return [(value - lo) / (hi - lo) for value in values]
+
+        blur_norm = normalize(blur_values)
+        contrast_norm = normalize(contrast_values)
+        spec_norm = normalize(spec_values)
+
+        tiny_factor = max(0.0, min(1.0, (96.0 - float(min(image.shape[:2]))) / 96.0))
+
+        scores: dict[str, Optional[float]] = {}
+        for index, candidate in enumerate(candidates):
+            profile = profiles[index]
+            family_prior = float(profile.get("prior", 0.0))
+
+            if candidate.selected_method in {"BSRGAN", "DiffBIR", "SeeSR"}:
+                family_prior += 6.0 * tiny_factor
+            elif candidate.selected_method in {"RealESRGAN", "SwinIR", "HAT", "DAT"}:
+                family_prior += 3.0 * (1.0 - tiny_factor)
+
+            if input_spec > 0.06 and candidate.selected_method in {"DAT", "DiffBIR", "SeeSR"}:
+                family_prior += 4.0
+            if input_blur < 120.0 and candidate.selected_method in {"RealESRGAN", "SwinIR", "HAT"}:
+                family_prior += 2.0
+            if input_contrast < 35.0 and candidate.selected_method in {"BSRGAN", "DiffBIR", "SeeSR"}:
+                family_prior += 2.0
+
+            score = 100.0 * (0.40 * blur_norm[index] + 0.30 * contrast_norm[index] + 0.30 * (1.0 - spec_norm[index]))
+            score += family_prior
+            scores[candidate.selected_method] = float(max(0.0, min(100.0, score)))
+
+        return scores
 
     def upscale(self, image: np.ndarray) -> np.ndarray:
         # Normalize to HxWx3 uint8
@@ -380,7 +575,7 @@ class ReflectionEnhancementService:
         lab_out = cv2.merge([l_final, a, b])
         return cv2.cvtColor(lab_out, cv2.COLOR_LAB2RGB)
 
-    def _adaptive_sharpen(self, image: np.ndarray, spec_mask: np.ndarray) -> np.ndarray:
+    def _adaptive_sharpen(self, image: np.ndarray, spec_mask: np.ndarray, *, amount: float = 0.45) -> np.ndarray:
         """Adaptive sharpening based on content - moderate strength."""
         import cv2
 
@@ -395,8 +590,7 @@ class ReflectionEnhancementService:
         edges = np.sqrt(edges_x**2 + edges_y**2)
         edges = (edges / (edges.max() + 1e-6)).astype(np.uint8)
 
-        # Apply moderate sharpening (amount = 0.45 for subtle enhancement)
-        sharp = self._sharpen(img, amount=0.45)
+        sharp = self._sharpen(img, amount=amount)
 
         # Blend sharpening with a soft specularity mask to avoid amplifying noise.
         if spec_mask is None:
@@ -459,7 +653,7 @@ class ReflectionEnhancementService:
         channels = [wiener(img[:, :, c]) for c in range(3)]
         return np.stack(channels, axis=-1)
 
-    def _denoise_sr(self, image: np.ndarray) -> np.ndarray:
+    def _denoise_sr(self, image: np.ndarray, *, h_override: Optional[int] = None) -> np.ndarray:
         """Mild post-SR denoising to reduce GAN texture noise."""
         import cv2
 
@@ -467,7 +661,7 @@ class ReflectionEnhancementService:
         if img.dtype != np.uint8:
             img = np.clip(img, 0, 255).astype(np.uint8)
 
-        h = max(1, int(self._denoise_h))
+        h = max(1, int(self._denoise_h if h_override is None else h_override))
         # Fast non-local means is a good tradeoff for small crops.
         return cv2.fastNlMeansDenoisingColored(img, None, h, h, 7, 21)
 
@@ -519,7 +713,7 @@ class ReflectionEnhancementService:
                 except Exception:
                     pass
 
-    def _recover_contrast(self, image: np.ndarray) -> np.ndarray:
+    def _recover_contrast(self, image: np.ndarray, *, clahe_clip: Optional[float] = None) -> np.ndarray:
         """Recover local contrast after SR and denoising."""
         import cv2
 
@@ -529,7 +723,8 @@ class ReflectionEnhancementService:
 
         lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
         l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=self._clahe_clip, tileGridSize=(8, 8))
+        clip = self._clahe_clip if clahe_clip is None else float(clahe_clip)
+        clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8))
         l2 = clahe.apply(l)
         return cv2.cvtColor(cv2.merge([l2, a, b]), cv2.COLOR_LAB2RGB)
 
